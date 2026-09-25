@@ -22,5 +22,16 @@ jobs:
       - name: Install dependencies
         run: forge soldeer install
 
+      - name: Inspect upstream audit
+        run: |
+          curl -L --fail --silent --show-error https://raw.githubusercontent.com/NethermindEth/PublicAuditReports/main/NM0731-FINAL_IDOS.pdf -o audit.pdf
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          pdftotext -layout audit.pdf audit.txt
+          echo '=== STAKING/SLASHING MATCHES ==='
+          grep -niE 'unstake|unbond|slash|slashing|withdraw|delay|pending' audit.txt | head -n 300 || true
+          echo '=== FINDING/SEVERITY MATCHES ==='
+          grep -niE 'critical|high|medium|low|finding|issue|ID-' audit.txt | head -n 300 || true
+
       - name: Run pending-unstake PoC
         run: forge test --match-path test/SecurityPendingUnstake.t.sol --match-test test_PendingUnstakeEscapesLaterSlash -vvvv
