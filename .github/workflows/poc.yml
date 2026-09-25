@@ -1,0 +1,26 @@
+name: Pending Unstake PoC
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.0
+
+      - name: Install dependencies
+        run: forge soldeer install
+
+      - name: Run pending-unstake PoC
+        run: forge test --match-path test/SecurityPendingUnstake.t.sol --match-test test_PendingUnstakeEscapesLaterSlash -vvvv
