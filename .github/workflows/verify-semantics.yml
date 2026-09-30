@@ -15,7 +15,13 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/idos-network/contracts/ebbae56b3bf3598dc9794032dd3df37c772cfe8d/NM0731-FINAL_IDOS.pdf -o audit.pdf
           pdftotext -layout audit.pdf audit.txt
-      - name: Extract staking and slashing semantics
+      - name: Extract relevant audit finding
         run: |
-          echo '=== MATCHED LINES ==='
-          grep -Ein -C 5 'unstak|unbond|slash|slashable|staking|stake.*withdraw|withdraw.*stake' audit.txt || true
+          echo '=== FINDING 5 ==='
+          python3 - <<'PY'
+          from pathlib import Path
+          t=Path("audit.txt").read_text(errors="replace")
+          a=t.find("[Low] Users can evade slashing penalties")
+          b=t.find("[Low] Users can manipulate reward distribution", a+1)
+          print(t[a:b if b != -1 else None])
+          PY
