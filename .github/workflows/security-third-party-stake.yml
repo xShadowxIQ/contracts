@@ -1,4 +1,5 @@
 name: Security PoC - Third Party Stake
+
 on:
   push:
     branches: [master]
@@ -8,22 +9,24 @@ jobs:
   third-party-stake-poc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Install Foundry
-        run: |
-          curl -L https://foundry.paradigm.xyz | bash
-          echo "$HOME/.foundry/bin" >> $GITHUB_PATH
-          foundryup -i "$(cat .foundry-version)"
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.0
 
       - name: Install dependencies
-        run: |
-          forge soldeer install
+        run: forge soldeer install
 
-      - name: Run third-party stake PoC
+      - name: PoC - unauthorised third party spends victim allowance in stake()
         run: forge test --match-path "test/SecurityThirdPartyStake.t.sol" -vv
+
+      - name: Invariant - solvency and reward conservation
+        run: forge test --match-path "test/SecuritySolvencyInvariant.t.sol" -vv
 
       - name: Regression - full in-scope suite
         run: forge test --match-path "test/{IDOSNodeStaking,IDOSVesting,IDOSToken,Security*}*.sol"
