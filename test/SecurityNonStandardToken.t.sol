@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IDOSNodeStaking} from "../src/IDOSNodeStaking.sol";
+import {IDOSToken} from "../src/IDOSToken.sol";
 
 // Fee-on-transfer: the recipient receives LESS than `amount`.
 contract FeeOnTransferToken is ERC20 {
@@ -161,7 +162,8 @@ contract SecurityNonStandardTokenTest is Test {
     }
 
     function test_StandardTokenStillStakesNormally() public {
-        ERC20 token = new ERC20("Std", "STD");
+        // The real, standard, concrete token used in production.
+        IDOSToken token = new IDOSToken(owner);
         _deploy(token);
         _fund(token, alice, 10_000);
 
