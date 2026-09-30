@@ -40,6 +40,9 @@ jobs:
       - name: Griefing and view-function robustness
         run: FOUNDRY_FUZZ_RUNS=4000 forge test --match-path "test/SecurityGriefingAndViews.t.sol" -vv
 
+      - name: Adversarial ERC20s against the non-standard-token guard
+        run: forge test --match-path "test/SecurityNonStandardToken.t.sol" -vv
+
       - name: IDOSVesting review
         run: forge test --match-path "test/SecurityVestingReview.t.sol" -vv
 
