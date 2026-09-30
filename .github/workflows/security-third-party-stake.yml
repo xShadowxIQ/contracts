@@ -28,5 +28,14 @@ jobs:
       - name: Invariant - solvency and reward conservation
         run: forge test --match-path "test/SecuritySolvencyInvariant.t.sol" -vv
 
+      - name: Invariant - reward conservation under changing epoch reward
+        run: forge test --match-path "test/SecurityRewardConservation.t.sol" -vv
+
+      - name: Griefing and view-function robustness
+        run: forge test --match-path "test/SecurityGriefingAndViews.t.sol" -vv
+
+      - name: IDOSVesting review
+        run: forge test --match-path "test/SecurityVestingReview.t.sol" -vv
+
       - name: Regression - full in-scope suite
         run: forge test --match-path "test/{IDOSNodeStaking,IDOSVesting,IDOSToken,Security*}*.sol"
