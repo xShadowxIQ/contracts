@@ -19,8 +19,9 @@ jobs:
         run: pipx install slither-analyzer
       - name: Run Slither
         run: |
-          set -o pipefail
           for f in src/IDOSNodeStaking.sol src/IDOSVesting.sol src/IDOSToken.sol; do
+            base=$(basename "$f" .sol)
             echo "===== $f ====="
-            slither "$f" --exclude-dependencies 2>&1 | tee -a slither-all.txt
+            slither "$f" --exclude-dependencies --json "$base.json"
+            jq -r '.results.detectors[] | [.check,.impact,.confidence,.description] | @tsv' "$base.json" || true
           done
