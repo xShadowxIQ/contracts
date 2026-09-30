@@ -5,17 +5,15 @@ import subprocess
 import sys
 import time
 
+# Arbitrum Sepolia: this is where IDOSNodeStaking is actually deployed.
+# The Arbitrum One address in deployments.toml holds no code.
 ENDPOINTS = [
-    "https://arb1.arbitrum.io/rpc",
-    "https://arbitrum-one-rpc.publicnode.com",
-    "https://arbitrum.drpc.org",
-    "https://arbitrum.llamarpc.com",
-    "https://rpc.ankr.com/arbitrum",
-    "https://arbitrum.meowrpc.com",
-    "https://1rpc.io/arb",
-    "https://arbitrum.publicnode.com",
-    "https://arbitrum.gateway.tenderly.co",
-    "https://arb-mainnet.g.alchemy.com/v2/demo",
+    "https://sepolia-rollup.arbitrum.io/rpc",
+    "https://arbitrum-sepolia-rpc.publicnode.com",
+    "https://arbitrum-sepolia.drpc.org",
+    "https://arb-sepolia.llamarpc.com",
+    "https://arbitrum-sepolia.gateway.tenderly.co",
+    "https://1rpc.io/arb-sepolia",
 ]
 
 

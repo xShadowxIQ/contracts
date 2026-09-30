@@ -19,10 +19,10 @@ jobs:
         with:
           version: v1.5.0
 
-      - name: Fetch on-chain runtime bytecode (Arbitrum One)
+      - name: Fetch on-chain runtime bytecode (Arbitrum Sepolia - the actual staking deployment)
         run: |
           python3 .github/scripts/fetch_code.py \
-            0x6132F2EE66deC6bdf416BDA9588D663AeCeec337 onchain.hex
+            0xA07742fd930A8dF8dF35eE483aEe933545f84378 onchain.hex
 
       - name: Compile from source with the deployed solc version
         run: |
