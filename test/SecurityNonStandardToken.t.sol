@@ -6,28 +6,71 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IDOSNodeStaking} from "../src/IDOSNodeStaking.sol";
 
-/// @notice IDOSNodeStaking::stake() contains an explicit guard:
+// Fee-on-transfer: the recipient receives LESS than `amount`.
+contract FeeOnTransferToken is ERC20 {
+    uint256 public feeBps;
+
+    constructor(uint256 f) ERC20("Fee", "FEE") {
+        feeBps = f;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        uint256 fee = (value * feeBps) / 10_000;
+        super._update(from, to, value - fee);
+        if (fee > 0) {
+            super._update(from, address(0xdead), fee);
+        }
+    }
+}
+
+// Rebases upward on every transfer: the recipient receives MORE than `amount`.
+contract UpRebaseToken is ERC20 {
+    constructor() ERC20("Up", "UP") {}
+
+    function _update(address from, address to, uint256 value) internal override {
+        super._update(from, to, value);
+        if (from != address(0) && to != address(0)) {
+            super._update(address(0), to, value / 10);
+        }
+    }
+}
+
+// Reports a balanceOf larger than what it actually holds.
+contract LyingBalanceToken is ERC20 {
+    bool public lie;
+
+    constructor() ERC20("Liar", "LIAR") {}
+
+    function setLie(bool v) external {
+        lie = v;
+    }
+
+    function balanceOf(address a) public view override returns (uint256) {
+        return super.balanceOf(a) * (lie ? 2 : 1);
+    }
+}
+
+// Performs the transfer but returns false, as some pre-EIP-20 tokens did.
+contract NoReturnToken is ERC20 {
+    constructor() ERC20("NoRet", "NRT") {}
+
+    function transferFrom(address f, address t, uint256 v) public override returns (bool) {
+        super._transfer(f, t, v);
+        return false;
+    }
+}
+
+/// @notice IDOSNodeStaking::stake() carries an explicit guard:
 ///     uint256 prevBalance = idosToken.balanceOf(address(this));
 ///     idosToken.safeTransferFrom(user, address(this), amount);
 ///     uint256 received = idosToken.balanceOf(address(this)) - prevBalance;
 ///     if (received != amount) revert ERC20TransferAmountMismatch(amount, received);
-/// with the comment "guard against non-standard tokens".
+/// commented "guard against non-standard tokens".
 ///
-/// If this guard can be defeated, a caller could acquire staking credit for MORE
-/// than they actually paid, or the contract's accounting would diverge from its
+/// If that guard can be defeated, a caller could bank staking credit for MORE
+/// than was actually paid, or the contract's accounting would diverge from its
 /// token balance. This suite attacks the guard with adversarial ERC20s.
 contract SecurityNonStandardTokenTest is Test {
-    // Fee-on-transfer: recipient receives less than `amount`.
-    // burn the fee
-
-    // Rebasing upward on transfer: recipient receives MORE than `amount`.
-    // mint extra on every xfer
-
-    // Lies about balanceOf, reporting a larger balance than it holds.
-
-    // Returns false from transferFrom (pre-EIP-20 style return value handling).
-    // malicious false
-
     address owner = makeAddr("owner");
     address alice = makeAddr("alice");
     address attacker = makeAddr("attacker");
@@ -35,11 +78,13 @@ contract SecurityNonStandardTokenTest is Test {
 
     uint48 constant START = 1_700_000_000;
 
-    function _deploy(IERC20 token) internal returns (IDOSNodeStaking s) {
+    IDOSNodeStaking internal staking;
+
+    function _deploy(IERC20 token) internal {
         vm.prank(owner);
-        s = new IDOSNodeStaking(address(token), owner, START, 100);
+        staking = new IDOSNodeStaking(address(token), owner, START, 100);
         vm.prank(owner);
-        s.allowNode(node);
+        staking.allowNode(node);
         vm.warp(START);
     }
 
@@ -47,120 +92,83 @@ contract SecurityNonStandardTokenTest is Test {
         vm.prank(address(this));
         token.transfer(to, amt);
         vm.prank(to);
-        token.approve(address(_staking), type(uint256).max);
+        token.approve(address(staking), type(uint256).max);
     }
 
-    IDOSNodeStaking internal _staking;
-
-    /// @dev Fee-on-transfer: the guard must reject, and no credit may accrue.
     function test_FeeOnTransferTokenIsRejected() public {
-        FeeOnTransferToken token = new FeeOnTransferToken(100); // 1% fee
-        _staking = _deploy(token);
-
-        vm.prank(address(this));
-        token.transfer(alice, 10_000);
-        vm.prank(alice);
-        token.approve(address(_staking), type(uint256).max);
+        FeeOnTransferToken token = new FeeOnTransferToken(100);
+        _deploy(token);
+        _fund(token, alice, 10_000);
 
         vm.prank(alice);
         vm.expectRevert();
-        _staking.stake(address(0), node, 5_000);
+        staking.stake(address(0), node, 5_000);
 
-        assertEq(_staking.stakeByNodeByUser(alice, node), 0, "no credit for short transfer");
-        assertEq(_staking.getNodeStake(node), 0);
+        assertEq(staking.stakeByNodeByUser(alice, node), 0, "no credit for short transfer");
+        assertEq(staking.getNodeStake(node), 0);
     }
 
-    /// @dev Upward-rebasing: recipient receives MORE than `amount`. The guard
-    ///      must reject rather than over-credit.
     function test_UpRebaseTokenIsRejected() public {
         UpRebaseToken token = new UpRebaseToken();
-        _staking = _deploy(token);
-
-        vm.prank(address(this));
-        token.transfer(alice, 10_000);
-        vm.prank(alice);
-        token.approve(address(_staking), type(uint256).max);
+        _deploy(token);
+        _fund(token, alice, 10_000);
 
         vm.prank(alice);
         vm.expectRevert();
-        _staking.stake(address(0), node, 5_000);
+        staking.stake(address(0), node, 5_000);
 
-        assertEq(_staking.stakeByNodeByUser(alice, node), 0, "no credit for over-transfer");
+        assertEq(staking.stakeByNodeByUser(alice, node), 0, "no credit for over-transfer");
     }
 
-    /// @dev Lying balanceOf: if the guard trusts the token's reported balance it
-    ///      can be fooled into crediting a full stake for a partial payment.
     function test_LyingBalanceTokenCannotForgeStake() public {
         LyingBalanceToken token = new LyingBalanceToken();
-        _staking = _deploy(token);
-
-        vm.prank(address(this));
-        token.transfer(alice, 10_000);
-        vm.prank(alice);
-        token.approve(address(_staking), type(uint256).max);
+        _deploy(token);
+        _fund(token, alice, 10_000);
         token.setLie(true);
 
-        // balanceOf doubles the reported delta, so `received` != `amount` and the
-        // guard must fire.
         vm.prank(alice);
         vm.expectRevert();
-        _staking.stake(address(0), node, 5_000);
+        staking.stake(address(0), node, 5_000);
 
-        assertEq(_staking.stakeByNodeByUser(alice, node), 0, "no forged stake");
+        assertEq(staking.stakeByNodeByUser(alice, node), 0, "no forged stake");
     }
 
-    /// @dev Token returning false from transferFrom: SafeERC20 must reject it
-    ///      rather than treat the transfer as successful.
     function test_TokenReturningFalseIsRejected() public {
         NoReturnToken token = new NoReturnToken();
-        _staking = _deploy(token);
-
-        vm.prank(address(this));
-        token.transfer(alice, 10_000);
-        vm.prank(alice);
-        token.approve(address(_staking), type(uint256).max);
+        _deploy(token);
+        _fund(token, alice, 10_000);
 
         vm.prank(alice);
         vm.expectRevert();
-        _staking.stake(address(0), node, 5_000);
+        staking.stake(address(0), node, 5_000);
 
-        assertEq(_staking.stakeByNodeByUser(alice, node), 0, "no credit on false return");
+        assertEq(staking.stakeByNodeByUser(alice, node), 0, "no credit on false return");
     }
 
-    /// @dev The arbitrary-user path must be equally protected: an attacker must
-    ///      not be able to bank a forged stake against a victim.
     function test_GuardHoldsOnTheArbitraryUserPath() public {
-        FeeOnTransferToken token = new FeeOnTransferToken(500); // 5% fee
-        _staking = _deploy(token);
+        FeeOnTransferToken token = new FeeOnTransferToken(500);
+        _deploy(token);
+        _fund(token, alice, 10_000);
 
-        vm.prank(address(this));
-        token.transfer(alice, 10_000);
-        vm.prank(alice);
-        token.approve(address(_staking), type(uint256).max);
+        uint256 aliceBefore = token.balanceOf(alice);
 
         vm.prank(attacker);
         vm.expectRevert();
-        _staking.stake(alice, node, 5_000);
+        staking.stake(alice, node, 5_000);
 
-        assertEq(_staking.stakeByNodeByUser(alice, node), 0);
-        assertEq(token.balanceOf(alice), 10_000, "victim balance untouched");
+        assertEq(staking.stakeByNodeByUser(alice, node), 0);
+        assertEq(token.balanceOf(alice), aliceBefore, "victim balance untouched");
     }
 
-    /// @dev Sanity: a STANDARD token still works, proving the guard is not simply
-    ///      rejecting everything.
     function test_StandardTokenStillStakesNormally() public {
         ERC20 token = new ERC20("Std", "STD");
-        _staking = _deploy(token);
-
-        vm.prank(address(this));
-        token.transfer(alice, 10_000);
-        vm.prank(alice);
-        token.approve(address(_staking), type(uint256).max);
+        _deploy(token);
+        _fund(token, alice, 10_000);
 
         vm.prank(alice);
-        _staking.stake(address(0), node, 5_000);
+        staking.stake(address(0), node, 5_000);
 
-        assertEq(_staking.stakeByNodeByUser(alice, node), 5_000, "standard path unaffected");
-        assertEq(_staking.getNodeStake(node), 5_000);
+        assertEq(staking.stakeByNodeByUser(alice, node), 5_000, "standard path unaffected");
+        assertEq(staking.getNodeStake(node), 5_000);
     }
 }
