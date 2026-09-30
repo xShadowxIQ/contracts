@@ -60,7 +60,7 @@ contract SecurityEpochBoundaryTest is Test {
         assertEq(reward, 0, "held ~24h but accrued zero reward");
 
         vm.prank(alice);
-        vm.expectRevert(IDOSNodeStaking.NoWithdrawableStake.selector);
+        vm.expectRevert(abi.encodeWithSignature("NoWithdrawableStake()"));
         staking.withdrawUnstaked();
 
         vm.prank(alice);
