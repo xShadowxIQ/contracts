@@ -1,4 +1,4 @@
-name: Security Static Analysis
+name: Security Static Analysis (In-Scope Only)
 
 on:
   push:
@@ -9,19 +9,83 @@ jobs:
   slither:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
-      - name: Install dependencies
-        run: forge soldeer install
-      - name: Install Slither
-        run: pipx install slither-analyzer
-      - name: Run Slither
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.0
+
+      - name: Install solc + dependencies
         run: |
-          for f in src/IDOSNodeStaking.sol src/IDOSVesting.sol src/IDOSToken.sol; do
-            base=$(basename "$f" .sol)
-            echo "===== $f ====="
-            slither "$f" --exclude-dependencies --json "$base.json"
-            jq -r '.results.detectors[] | [.check,.impact,.confidence,.description] | @tsv' "$base.json" || true
-          done
+          forge soldeer install
+
+      # Scope ONLY the three bounty files. The previous attempt ran Slither over
+      # the whole project, which crashed crytic-compile while recursing through the
+      # continuous-clearing-auction submodule tree (v4-periphery/solmate/ds-test...).
+      # Restricting --include-path keeps the analysis deterministic.
+      - name: Slither - IDOSNodeStaking
+        run: |
+          mkdir -p .slither-out
+          slither src/IDOSNodeStaking.sol \
+            --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
+            --compile-force-framework foundry \
+            --foundry-out-directory out \
+            --exclude-dependencies \
+            --json .slither-out/staking.json || true
+          echo "===== IDOSNodeStaking detectors ====="
+          if [ -s .slither-out/staking.json ]; then
+            python3 - <<'PY'
+          import json
+          d = json.load(open('.slither-out/staking.json'))
+          det = d.get('results', {}).get('detectors', [])
+          print(f"total detectors fired: {len(det)}")
+          for x in det:
+              print(f"[{x.get('impact','?')}/{x.get('confidence','?')}] {x.get('check')} :: {x.get('description','')[:400]}")
+          PY
+          else
+            echo "no json produced"
+          fi
+
+      - name: Slither - IDOSToken
+        run: |
+          slither src/IDOSToken.sol \
+            --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
+            --compile-force-framework foundry \
+            --foundry-out-directory out \
+            --exclude-dependencies \
+            --json .slither-out/token.json || true
+          echo "===== IDOSToken detectors ====="
+          if [ -s .slither-out/token.json ]; then
+            python3 - <<'PY'
+          import json
+          d = json.load(open('.slither-out/token.json'))
+          det = d.get('results', {}).get('detectors', [])
+          print(f"total detectors fired: {len(det)}")
+          for x in det:
+              print(f"[{x.get('impact','?')}/{x.get('confidence','?')}] {x.get('check')} :: {x.get('description','')[:400]}")
+          PY
+          fi
+
+      - name: Slither - IDOSVesting
+        run: |
+          slither src/IDOSVesting.sol \
+            --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
+            --compile-force-framework foundry \
+            --foundry-out-directory out \
+            --exclude-dependencies \
+            --json .slither-out/vesting.json || true
+          echo "===== IDOSVesting detectors ====="
+          if [ -s .slither-out/vesting.json ]; then
+            python3 - <<'PY'
+          import json
+          d = json.load(open('.slither-out/vesting.json'))
+          det = d.get('results', {}).get('detectors', [])
+          print(f"total detectors fired: {len(det)}")
+          for x in det:
+              print(f"[{x.get('impact','?')}/{x.get('confidence','?')}] {x.get('check')} :: {x.get('description','')[:400]}")
+          PY
+          fi
