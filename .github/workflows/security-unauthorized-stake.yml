@@ -1,0 +1,19 @@
+name: Security PoC - Unauthorized Stake
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Install dependencies
+        run: forge soldeer install
+      - name: Run PoC
+        run: forge test --match-path test/SecurityUnauthorizedStake.t.sol --match-test test_ThirdPartyCanStakeFromVictimAllowance -vvvv
