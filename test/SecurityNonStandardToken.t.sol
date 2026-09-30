@@ -15,6 +15,10 @@ contract FeeOnTransferToken is ERC20 {
         feeBps = f;
     }
 
+    function mint(address to, uint256 v) external {
+        _mint(to, v);
+    }
+
     function _update(address from, address to, uint256 value) internal override {
         uint256 fee = (value * feeBps) / 10_000;
         super._update(from, to, value - fee);
@@ -27,6 +31,10 @@ contract FeeOnTransferToken is ERC20 {
 // Rebases upward on every transfer: the recipient receives MORE than `amount`.
 contract UpRebaseToken is ERC20 {
     constructor() ERC20("Up", "UP") {}
+
+    function mint(address to, uint256 v) external {
+        _mint(to, v);
+    }
 
     function _update(address from, address to, uint256 value) internal override {
         super._update(from, to, value);
@@ -42,6 +50,10 @@ contract LyingBalanceToken is ERC20 {
 
     constructor() ERC20("Liar", "LIAR") {}
 
+    function mint(address to, uint256 v) external {
+        _mint(to, v);
+    }
+
     function setLie(bool v) external {
         lie = v;
     }
@@ -55,10 +67,18 @@ contract LyingBalanceToken is ERC20 {
 contract NoReturnToken is ERC20 {
     constructor() ERC20("NoRet", "NRT") {}
 
+    function mint(address to, uint256 v) external {
+        _mint(to, v);
+    }
+
     function transferFrom(address f, address t, uint256 v) public override returns (bool) {
         super._transfer(f, t, v);
         return false;
     }
+}
+
+interface IMintable {
+    function mint(address to, uint256 v) external;
 }
 
 /// @notice IDOSNodeStaking::stake() carries an explicit guard:
@@ -89,17 +109,26 @@ contract SecurityNonStandardTokenTest is Test {
         vm.warp(START);
     }
 
-    function _fund(IERC20 token, address to, uint256 amt) internal {
-        vm.prank(address(this));
-        token.transfer(to, amt);
-        vm.prank(to);
+    /// @dev Mocks are funded by minting to this test contract first.
+    function _fundMock(IMintable token, uint256 amt) internal {
+        token.mint(address(this), 1_000_000);
+        token.transfer(alice, amt);
+        vm.prank(alice);
+        token.approve(address(staking), type(uint256).max);
+    }
+
+    /// @dev IDOSToken mints its whole supply to the initial treasury (owner).
+    function _fundTreasury(IDOSToken token, uint256 amt) internal {
+        vm.prank(owner);
+        token.transfer(alice, amt);
+        vm.prank(alice);
         token.approve(address(staking), type(uint256).max);
     }
 
     function test_FeeOnTransferTokenIsRejected() public {
         FeeOnTransferToken token = new FeeOnTransferToken(100);
         _deploy(token);
-        _fund(token, alice, 10_000);
+        _fundMock(token, 10_000);
 
         vm.prank(alice);
         vm.expectRevert();
@@ -112,7 +141,7 @@ contract SecurityNonStandardTokenTest is Test {
     function test_UpRebaseTokenIsRejected() public {
         UpRebaseToken token = new UpRebaseToken();
         _deploy(token);
-        _fund(token, alice, 10_000);
+        _fundMock(token, 10_000);
 
         vm.prank(alice);
         vm.expectRevert();
@@ -124,7 +153,7 @@ contract SecurityNonStandardTokenTest is Test {
     function test_LyingBalanceTokenCannotForgeStake() public {
         LyingBalanceToken token = new LyingBalanceToken();
         _deploy(token);
-        _fund(token, alice, 10_000);
+        _fundMock(token, 10_000);
         token.setLie(true);
 
         vm.prank(alice);
@@ -137,7 +166,7 @@ contract SecurityNonStandardTokenTest is Test {
     function test_TokenReturningFalseIsRejected() public {
         NoReturnToken token = new NoReturnToken();
         _deploy(token);
-        _fund(token, alice, 10_000);
+        _fundMock(token, 10_000);
 
         vm.prank(alice);
         vm.expectRevert();
@@ -149,7 +178,7 @@ contract SecurityNonStandardTokenTest is Test {
     function test_GuardHoldsOnTheArbitraryUserPath() public {
         FeeOnTransferToken token = new FeeOnTransferToken(500);
         _deploy(token);
-        _fund(token, alice, 10_000);
+        _fundMock(token, 10_000);
 
         uint256 aliceBefore = token.balanceOf(alice);
 
@@ -165,7 +194,7 @@ contract SecurityNonStandardTokenTest is Test {
         // The real, standard, concrete token used in production.
         IDOSToken token = new IDOSToken(owner);
         _deploy(token);
-        _fund(token, alice, 10_000);
+        _fundTreasury(token, 10_000);
 
         vm.prank(alice);
         staking.stake(address(0), node, 5_000);
