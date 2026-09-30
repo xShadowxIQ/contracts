@@ -1,0 +1,22 @@
+name: Security Static Analysis
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  slither:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Install dependencies
+        run: forge soldeer install && forge install
+      - name: Install Slither
+        run: pipx install slither-analyzer
+      - name: Run Slither on in-scope contracts
+        run: |
+          slither src/IDOSNodeStaking.sol --exclude-informational,low 2>&1 | tee slither-staking.txt
+          slither src/IDOSVesting.sol --exclude-informational,low 2>&1 | tee slither-vesting.txt
+          slither src/IDOSToken.sol --exclude-informational,low 2>&1 | tee slither-token.txt
