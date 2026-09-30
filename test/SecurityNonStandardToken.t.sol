@@ -77,7 +77,7 @@ contract NoReturnToken is ERC20 {
     }
 }
 
-interface IMintable {
+interface IMintable is IERC20 {
     function mint(address to, uint256 v) external;
 }
 
