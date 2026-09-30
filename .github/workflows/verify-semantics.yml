@@ -9,6 +9,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      - name: Install PDF tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
       - name: Fetch audit report
         run: |
           curl -fsSL https://raw.githubusercontent.com/idos-network/contracts/ebbae56b3bf3598dc9794032dd3df37c772cfe8d/NM0731-FINAL_IDOS.pdf -o audit.pdf
