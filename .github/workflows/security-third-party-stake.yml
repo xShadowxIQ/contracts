@@ -1,0 +1,29 @@
+name: Security PoC - Third Party Stake
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  third-party-stake-poc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        run: |
+          curl -L https://foundry.paradigm.xyz | bash
+          echo "$HOME/.foundry/bin" >> $GITHUB_PATH
+          foundryup -i "$(cat .foundry-version)"
+
+      - name: Install dependencies
+        run: |
+          forge soldeer install
+
+      - name: Run third-party stake PoC
+        run: forge test --match-path "test/SecurityThirdPartyStake.t.sol" -vv
+
+      - name: Regression - full in-scope suite
+        run: forge test --match-path "test/{IDOSNodeStaking,IDOSVesting,IDOSToken,Security*}*.sol"
