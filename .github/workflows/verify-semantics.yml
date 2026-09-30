@@ -1,4 +1,4 @@
-name: Verify Staking Semantics
+name: Verify Staking Finding 5
 
 on:
   push:
@@ -15,13 +15,9 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/idos-network/contracts/ebbae56b3bf3598dc9794032dd3df37c772cfe8d/NM0731-FINAL_IDOS.pdf -o audit.pdf
           pdftotext -layout audit.pdf audit.txt
-      - name: Extract relevant audit finding
+      - name: Print finding 5 context
         run: |
-          echo '=== FINDING 5 ==='
-          python3 - <<'PY'
-          from pathlib import Path
-          t=Path("audit.txt").read_text(errors="replace")
-          a=t.find("[Low] Users can evade slashing penalties")
-          b=t.find("[Low] Users can manipulate reward distribution", a+1)
-          print(t[a:b if b != -1 else None])
-          PY
+          grep -n -i 'Users can evade slashing penalties' audit.txt
+          echo '=== FULL CONTEXT ==='
+          n=$(grep -n -i 'Users can evade slashing penalties' audit.txt | tail -1 | cut -d: -f1)
+          sed -n "$((n-5)),$((n+80))p" audit.txt
