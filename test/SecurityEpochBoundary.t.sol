@@ -17,7 +17,12 @@ contract SecurityEpochBoundaryTest is Test {
     address alice = makeAddr("alice");
     address node = makeAddr("node");
 
-    uint48 constant START = 1_000_000;
+    // Realistic timestamp (Nov 2023). Must be well above UNSTAKE_DELAY (1,209,600),
+    // because withdrawUnstaked() computes `uint48(block.timestamp) - UNSTAKE_DELAY`.
+    // Any start below 1,209,600 makes that subtraction underflow - i.e. before
+    // 1970-01-15 - which is unreachable on a real chain and only an artefact of
+    // small synthetic start times.
+    uint48 constant START = 1_700_000_000;
     uint256 constant REWARD = 1_000;
     uint256 constant STAKE = 10_000;
 
