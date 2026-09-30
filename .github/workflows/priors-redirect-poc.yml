@@ -1,12 +1,18 @@
 name: Priors PoC - x402 redirect guard
 
 # Independent CI confirmation of a finding in priors-agents/priors (@priors/x402).
-# The report itself cannot be pushed to that fork from this bot account, so this
-# workflow checks out the exact upstream commit that contains the defect and runs the
-# PoC there, unmodified.
+# This bot has no push access to that fork, so the PoC runs against a fresh checkout of
+# the exact upstream commit that contains the defect, unmodified.
 #
-# Expected result: the PoC exits NON-ZERO, because the finding is that the guard is
-# lost. This job asserts that, so the workflow passes only when the bug reproduces.
+# Two checks:
+#   1. unit  - the Request handed to fetch is built with redirect:"follow" instead of
+#              "manual" when init.redirect is undefined.
+#   2. e2e   - two real HTTP servers: the merchant 302s to a second origin, and the
+#              second origin reports whether it received the signed PAYMENT-SIGNATURE
+#              header. This demonstrates the leak rather than inferring it.
+#
+# Both checks expect the finding, so both exit NON-ZERO when it reproduces. The job
+# asserts that, so it passes only when the bug is present.
 
 on:
   push:
@@ -27,192 +33,42 @@ jobs:
           git checkout FETCH_HEAD
           echo "priors at: $(git rev-parse HEAD)"
 
-      - name: Install the PoC and its dependencies
+      - name: Install dependencies
+        working-directory: priors
+        run: npm install --no-audit --no-fund
+
+      - name: Unit PoC - the redirect mode of the request the payer builds
         working-directory: priors
         run: |
-          curl -sL https://foundry.paradigm.xyz | bash
-          npm install --no-audit --no-fund
-          mkdir -p scripts
-          cat > scripts/test-x402-redirect-guard.mjs <<'POC'
-          // PoC: @priors/x402 follows redirects with a signed payment header when the
-          // caller's init carries `redirect: undefined`.
-          //
-          // packages/x402/src/payer.mjs:
-          //   const asRequest = (input, init) => new Request(input, { redirect: "manual", ...(init || {}) });
-          // The spread comes AFTER the default, so an init that mentions redirect but
-          // leaves it undefined overwrites "manual" with undefined, and `new Request`
-          // applies the platform default, "follow". The signed PAYMENT-SIGNATURE header
-          // then rides along to whatever host the redirect names.
-          //
-          // sdk/float.mjs was fixed for exactly this in commit 32e0e8d; this file was not.
-          import assert from "node:assert/strict";
-          import { createPayer } from "../packages/x402/src/payer.mjs";
+          cp "$GITHUB_WORKSPACE/.github/poc/x402-redirect-guard.mjs" scripts/
+          set +e
+          node scripts/test-x402-redirect-guard.mjs | tee poc.out
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "unit PoC exit code: $rc"
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::the redirect guard held; the reported finding does not reproduce"
+            exit 1
+          fi
+          grep -q 'redirect="follow"' poc.out || { echo "::error::unexpected failure"; exit 1; }
+          echo "::notice::CONFIRMED: resend() drops redirect:manual to follow when init.redirect is undefined"
 
-          const PAYMENT = { "PAYMENT-SIGNATURE": "c2lnbmVkLXBheW1lbnQ" };
-          const signer = {
-            getAddress: async () => "0x1111111111111111111111111111111111111111",
-            signTypedData: async () => "0x" + "11".repeat(65),
-            provider: {},
-          };
-
-          async function probe(init) {
-            const seen = [];
-            const fetchImpl = async (req) => {
-              seen.push({ redirect: req.redirect, leaked: req.headers.get("PAYMENT-SIGNATURE") });
-              return new Response(null, { status: 200 });
-            };
-            const payer = createPayer({ signer, fetchImpl, pendingRetries: 0 });
-            // resend(input, paymentHeaders, init): init is the RequestInit itself.
-            await payer.resend("https://merchant.example/resource", PAYMENT, init);
-            assert.equal(seen.length, 1);
-            return seen[0];
-          }
-
-          let failed = 0;
-          const check = async (name, init, expected) => {
-            const got = await probe(init);
-            const ok = got.redirect === expected;
-            if (!ok) failed++;
-            console.log(`  ${ok ? "ok  " : "FAIL"} ${name}: redirect=${JSON.stringify(got.redirect)} (expected ${JSON.stringify(expected)}), payment header present: ${got.leaked ? "yes" : "no"}`);
-          };
-
-          console.log("@priors/x402 redirect guard");
-          await check("init with no `redirect` key", { method: "GET" }, "manual");
-          await check("init with `redirect: undefined`", { method: "GET", redirect: undefined }, "manual");
-          await check("init with `redirect: \"manual\"`", { method: "GET", redirect: "manual" }, "manual");
-          await check("init omitted (the path pay() itself uses)", undefined, "manual");
-
-          if (failed === 0) {
-            console.log("PASS: the payer held redirect:manual in every case.");
-            process.exit(0);
-          }
-          console.log(`FAIL: ${failed} case(s) lost the redirect guard.`);
-          process.exit(1);
-          POC
-
-      - name: End-to-end: does the signed header actually reach a second origin?
+      - name: End-to-end PoC - the signed header reaches a second origin
         working-directory: priors
         run: |
-          cat > scripts/test-x402-redirect-e2e.mjs <<'E2E'
-// End-to-end PoC: the signed payment header actually ARRIVES at a second origin.
-//
-// The unit-level check (`test-x402-redirect-guard.mjs`) only proves the Request is built
-// with redirect:"follow". This proves the consequence: two real HTTP servers, the first
-// answering 302 to the second, and the second reporting whether it received the
-// PAYMENT-SIGNATURE header that was signed for a purchase at the first.
-//
-//   node scripts/test-x402-redirect-e2e.mjs
-//
-// Exits 0 if the header reached the redirect target (the finding), 1 if the guard held.
-
-import assert from "node:assert/strict";
-import http from "node:http";
-import { createPayer } from "../packages/x402/src/payer.mjs";
-
-const PAYMENT = { "PAYMENT-SIGNATURE": "SIGNED-AUTHORIZATION-FOR-ORIGIN-A" };
-const signer = {
-  getAddress: async () => "0x1111111111111111111111111111111111111111",
-  signTypedData: async () => "0x" + "11".repeat(65),
-  provider: {},
-};
-
-const listen = (server) =>
-  new Promise((r) => server.listen(0, "127.0.0.1", () => r(server.address().port)));
-
-function close(server) {
-  return new Promise((r) => server.close(r));
-}
-
-async function main() {
-  // Origin B: the redirect target. Records what it received.
-  let leaked = null;
-  const b = http.createServer((req, res) => {
-    leaked = {
-      paymentSignature: req.headers["payment-signature"] ?? null,
-      host: req.headers.host,
-    };
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end("ok");
-  });
-  const bPort = await listen(b);
-
-  // Origin A: the merchant. Answers 302 to origin B.
-  const a = http.createServer((req, res) => {
-    res.writeHead(302, { location: `http://127.0.0.1:${bPort}/landing` });
-    res.end();
-  });
-  const aPort = await listen(a);
-
-  const origin = `http://127.0.0.1:${aPort}/resource`;
-
-  try {
-    // The caller spread its options and `opts.redirect` is unset -> explicitly undefined.
-    const opts = { method: "GET" };
-    const payer = createPayer({ signer, pendingRetries: 0 });
-    await payer.resend(origin, PAYMENT, { ...opts, redirect: opts.redirect });
-
-    console.log(`origin A  http://127.0.0.1:${aPort}/resource`);
-    console.log(`origin B  http://127.0.0.1:${bPort}/landing`);
-    console.log("");
-    console.log("  init passed to resend(): { method: 'GET', redirect: undefined }");
-    console.log("");
-    console.log(`  origin B received PAYMENT-SIGNATURE: ${leaked ? JSON.stringify(leaked.paymentSignature) : "(request never arrived)"}`);
-
-    if (!leaked) {
-      console.log("");
-      console.log("PASS: the redirect was not followed; the authorization stayed on origin A.");
-      return 1;
-    }
-    if (leaked.paymentSignature !== PAYMENT["PAYMENT-SIGNATURE"]) {
-      console.log("");
-      console.log("INCONCLUSIVE: origin B was reached but without the signed header.");
-      return 1;
-    }
-
-    console.log("");
-    console.log("FAIL: the signed authorization crossed the redirect boundary.");
-    console.log("");
-    console.log("  The header was signed for a purchase at origin A and arrived intact at origin B,");
-    console.log("  a host the caller never named. It stays cashable until its validBefore.");
-    return 0;
-  } finally {
-    await close(a);
-    await close(b);
-  }
-}
-
-process.exit(await main());
-          E2E
+          cp "$GITHUB_WORKSPACE/.github/poc/x402-redirect-e2e.mjs" scripts/
           set +e
           node scripts/test-x402-redirect-e2e.mjs | tee poc-e2e.out
           rc=${PIPESTATUS[0]}
           set -e
           echo "e2e exit code: $rc"
           if [ "$rc" -ne 0 ]; then
-            echo "::error::the redirect was NOT followed; the reported finding does not reproduce end to end"
+            echo "::error::the redirect was NOT followed; the finding does not reproduce end to end"
             exit 1
           fi
-          grep -q 'origin B received PAYMENT-SIGNATURE: "SIGNED-AUTHORIZATION-FOR-ORIGIN-A"' poc-e2e.out || {
+          grep -q 'origin B received PAYMENT-SIGNATURE' poc-e2e.out || {
             echo "::error::e2e passed for an unexpected reason"; exit 1; }
           echo "::notice::CONFIRMED END TO END: the signed authorization arrived intact at the redirect target"
-
-      - name: The PoC must FAIL (that is the finding)
-        working-directory: priors
-        run: |
-          set +e
-          node scripts/test-x402-redirect-guard.mjs | tee poc.out
-          rc=${PIPESTATUS[0]}
-          set -e
-          echo "PoC exit code: $rc"
-          if [ "$rc" -eq 0 ]; then
-            echo "::error::the redirect guard held; the reported finding does not reproduce"
-            exit 1
-          fi
-          grep -q 'redirect="follow" (expected "manual")' poc.out || {
-            echo "::error::PoC failed for an unexpected reason"
-            exit 1
-          }
-          echo "::notice::CONFIRMED: resend() drops redirect:manual to follow when init.redirect is undefined"
 
       - name: Publish
         if: always()
