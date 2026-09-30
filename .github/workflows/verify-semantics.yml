@@ -1,0 +1,19 @@
+name: Verify Staking Semantics
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch audit report
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/idos-network/contracts/ebbae56b3bf3598dc9794032dd3df37c772cfe8d/NM0731-FINAL_IDOS.pdf -o audit.pdf
+          pdftotext -layout audit.pdf audit.txt
+      - name: Extract staking and slashing semantics
+        run: |
+          echo '=== MATCHED LINES ==='
+          grep -Ein -C 5 'unstak|unbond|slash|slashable|staking|stake.*withdraw|withdraw.*stake' audit.txt || true
