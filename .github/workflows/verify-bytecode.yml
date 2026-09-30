@@ -21,75 +21,26 @@ jobs:
 
       - name: Fetch on-chain runtime bytecode (Arbitrum One)
         run: |
-          set -uo pipefail
-          STAKING=0x6132F2EE66deC6bdf416BDA9588D663AeCeec337
-          for u in https://arb1.arbitrum.io/rpc \
-                   https://arbitrum-one-rpc.publicnode.com \
-                   https://arbitrum.drpc.org \
-                   https://arbitrum.meowrpc.com; do
-            resp=$(curl -s --max-time 25 -X POST "$u" -H 'Content-Type: application/json' \
-              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$STAKING\",\"latest\"]}" || true)
-            code=$(printf '%s' "$resp" | python3 -c "import sys,json
-          try:
-              d=json.load(sys.stdin); print(d.get('result','') or '')
-          except Exception:
-              print('')" 2>/dev/null || true)
-            if [ "${#code}" -gt 1000 ]; then
-              echo "fetched from $u"
-              printf '%s' "$code" | sed 's/^0x//' > onchain.hex
-              echo "on-chain runtime size: $(( $(wc -c < onchain.hex) / 2 )) bytes"
-              echo "solc version in metadata: 0x$(tail -c 10 onchain.hex)"
-              exit 0
-            fi
-            echo "  miss $u" >&2
-          done
-          echo "FAILED to fetch on-chain bytecode"
-          exit 1
+          python3 .github/scripts/fetch_code.py \
+            0x6132F2EE66deC6bdf416BDA9588D663AeCeec337 onchain.hex
 
       - name: Compile from source with the deployed solc version
         run: |
           set -euo pipefail
-          # Isolate src/ so the pinned solc in test/ does not force a different version.
+          # Isolate src/ so the solc pin in test/ does not force a different version.
           mkdir -p /tmp/hold
           mv test script /tmp/hold/
           forge soldeer install
-          # 0.8.28 matches the compiler recorded in the on-chain metadata.
+          # 0.8.28 is the compiler recorded in the on-chain metadata.
           forge build --use 0.8.28 --optimize --optimizer-runs 200 --skip script
           mv /tmp/hold/test /tmp/hold/script .
-          ls -la out/IDOSNodeStaking.sol/IDOSNodeStaking.json
 
       - name: Compare compiled runtime bytecode with on-chain
         run: |
-          python3 - <<'PY'
-          import json, sys
-
-          MET = "a264697066735822"  # CBOR metadata prefix emitted by solc
-
-          def strip(b: str) -> str:
-              i = b.rfind(MET)
-              return b[:i] if i > 0 else b
-
-          art = json.load(open("out/IDOSNodeStaking.sol/IDOSNodeStaking.json"))
-          local = art["deployedBytecode"]["object"]
-          if local.startswith("0x"):
-              local = local[2:]
-          onchain = open("onchain.hex").read().strip()
-
-          ls, os_ = strip(local), strip(onchain)
-          print(f"local   runtime bytes: {len(local)//2}")
-          print(f"onchain runtime bytes: {len(onchain)//2}")
-          print(f"after metadata strip  : local={len(ls)//2}  onchain={len(os_)//2}")
-
-          if ls == os_:
-              print("RESULT: EXACT MATCH (ignoring compiler metadata).")
-              print("Deployed IDOSNodeStaking bytecode == compiled source.")
-              sys.exit(0)
-
-          print("RESULT: BYTECODE DIFFERS -> deployed contract is NOT the audited source.")
-          n = min(len(ls), len(os_))
-          first = next((i for i in range(n) if ls[i] != os_[i]), n)
-          print(f"first divergence at byte {first//2} (offset {first} nibbles)")
-          print(f"  local  : ...{ls[max(0,first-40):first+80]}")
-          print(f"  onchain: ...{os_[max(0,first-40):first+80]}")
-          sys.exit(0)
-          PY
+          python3 .github/scripts/compare_bytecode.py \
+            out/IDOSNodeStaking.sol/IDOSNodeStaking.json onchain.hex IDOSNodeStaking \
+            | tee parity.txt
+          echo ""
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat parity.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
