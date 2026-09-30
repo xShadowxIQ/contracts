@@ -41,6 +41,8 @@ contract SecurityUnauthorizedStakeTest is Test {
         assertEq(token.balanceOf(victim), victimBefore - 100);
         assertEq(staking.stakeByNodeByUser(victim, node), 100);
         assertEq(staking.getNodeStake(node), 100);
-        assertEq(staking.getUserStake(victim), (100, 0));
+        (uint256 active, uint256 slashed) = staking.getUserStake(victim);
+        assertEq(active, 100);
+        assertEq(slashed, 0);
     }
 }
