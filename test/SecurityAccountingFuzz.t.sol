@@ -122,7 +122,7 @@ contract SecurityAccountingFuzzTest is Test {
 
         uint256 sumWithdrawable;
         for (uint256 u; u < users.length; ++u) {
-            (uint256 amount,,,,) = staking.withdrawableReward(users[u]);
+            (uint256 amount,,,) = staking.withdrawableReward(users[u]);
             sumWithdrawable += amount;
         }
 
