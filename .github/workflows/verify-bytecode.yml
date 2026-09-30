@@ -1,4 +1,4 @@
-name: Verify Deployed Bytecode Matches Source
+name: Verify Deployed Bytecode Matches Source (legacy)
 
 on:
   push:

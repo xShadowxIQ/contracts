@@ -1,0 +1,60 @@
+name: Verify Live Deployments Match Source
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.0
+
+      # IDOSToken IS live on Arbitrum One and holds a real 1e27 supply.
+      # IDOSNodeStaking is live only on Arbitrum Sepolia (the Arbitrum One
+      # address documented in deployments.toml holds no code).
+      - name: Fetch live IDOSToken (Arbitrum One)
+        run: python3 .github/scripts/fetch_code_arb1.py 0x68731d6F14B827bBCfFbEBb62b19Daa18de1d79c token.hex
+
+      - name: Fetch live IDOSNodeStaking (Arbitrum Sepolia)
+        run: python3 .github/scripts/fetch_code.py 0xA07742fd930A8dF8dF35eE483aEe933545f84378 staking.hex
+
+      - name: Compile from source with deployed solc version
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/hold
+          mv test script /tmp/hold/
+          forge soldeer install
+          forge build --use 0.8.28 --optimize --optimizer-runs 200 --skip script
+          mv /tmp/hold/test /tmp/hold/script .
+
+      - name: Compare IDOSToken (Arbitrum One)
+        run: |
+          python3 .github/scripts/compare_bytecode.py \
+            out/IDOSToken.sol/IDOSToken.json token.hex IDOSToken-ARBITRUM_ONE | tee tok_parity.txt
+
+      - name: Compare IDOSNodeStaking (Arbitrum Sepolia)
+        run: |
+          python3 .github/scripts/compare_bytecode.py \
+            out/IDOSNodeStaking.sol/IDOSNodeStaking.json staking.hex IDOSNodeStaking-SEPOLIA | tee staking_parity.txt
+
+      - name: Summary
+        run: |
+          {
+            echo "## Deployed bytecode parity"
+            echo ""
+            echo "### IDOSToken - Arbitrum One (LIVE, 1e27 supply)"
+            echo '```'; cat tok_parity.txt; echo '```'
+            echo ""
+            echo "### IDOSNodeStaking - Arbitrum Sepolia (only live deployment)"
+            echo '```'; cat staking_parity.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
