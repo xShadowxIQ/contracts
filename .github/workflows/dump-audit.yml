@@ -1,0 +1,29 @@
+name: Dump Full Audit Report
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PDF tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - name: Fetch audit report
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/idos-network/contracts/ebbae56b3bf3598dc9794032dd3df37c772cfe8d/NM0731-FINAL_IDOS.pdf -o audit.pdf
+          pdftotext -layout audit.pdf audit.txt
+          wc -l audit.txt
+      - name: Findings summary table
+        run: |
+          echo '===== SUMMARY TABLE ====='
+          sed -n '100,150p' audit.txt
+      - name: Search for user-parameter / allowance / delegate mentions
+        run: |
+          echo '===== KEYWORD HITS ====='
+          grep -n -i -E 'allowance|on behalf|arbitrary|third.?part|delegat|user param|stake\(user|beneficiar|replay|permit' audit.txt || echo "NO HITS"
+      - name: Full body part 1
+        run: sed -n '150,420p' audit.txt
+      - name: Full body part 2
+        run: sed -n '420,700p' audit.txt
