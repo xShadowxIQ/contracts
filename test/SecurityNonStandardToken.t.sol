@@ -7,16 +7,22 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IDOSNodeStaking} from "../src/IDOSNodeStaking.sol";
 import {IDOSToken} from "../src/IDOSToken.sol";
 
-// Fee-on-transfer: the recipient receives LESS than `amount`.
-contract FeeOnTransferToken is ERC20 {
-    uint256 public feeBps;
-
-    constructor(uint256 f) ERC20("Fee", "FEE") {
-        feeBps = f;
-    }
+// Shared base for every adversarial mock. Concrete, so no interface casts are
+// needed when passing mocks to shared helpers.
+abstract contract MockToken is ERC20 {
+    constructor(string memory n, string memory s) ERC20(n, s) {}
 
     function mint(address to, uint256 v) external {
         _mint(to, v);
+    }
+}
+
+// Fee-on-transfer: the recipient receives LESS than `amount`.
+contract FeeOnTransferToken is MockToken {
+    uint256 public feeBps;
+
+    constructor(uint256 f) MockToken("Fee", "FEE") {
+        feeBps = f;
     }
 
     function _update(address from, address to, uint256 value) internal override {
@@ -29,12 +35,8 @@ contract FeeOnTransferToken is ERC20 {
 }
 
 // Rebases upward on every transfer: the recipient receives MORE than `amount`.
-contract UpRebaseToken is ERC20 {
-    constructor() ERC20("Up", "UP") {}
-
-    function mint(address to, uint256 v) external {
-        _mint(to, v);
-    }
+contract UpRebaseToken is MockToken {
+    constructor() MockToken("Up", "UP") {}
 
     function _update(address from, address to, uint256 value) internal override {
         super._update(from, to, value);
@@ -45,14 +47,10 @@ contract UpRebaseToken is ERC20 {
 }
 
 // Reports a balanceOf larger than what it actually holds.
-contract LyingBalanceToken is ERC20 {
+contract LyingBalanceToken is MockToken {
     bool public lie;
 
-    constructor() ERC20("Liar", "LIAR") {}
-
-    function mint(address to, uint256 v) external {
-        _mint(to, v);
-    }
+    constructor() MockToken("Liar", "LIAR") {}
 
     function setLie(bool v) external {
         lie = v;
@@ -64,21 +62,13 @@ contract LyingBalanceToken is ERC20 {
 }
 
 // Performs the transfer but returns false, as some pre-EIP-20 tokens did.
-contract NoReturnToken is ERC20 {
-    constructor() ERC20("NoRet", "NRT") {}
-
-    function mint(address to, uint256 v) external {
-        _mint(to, v);
-    }
+contract NoReturnToken is MockToken {
+    constructor() MockToken("NoRet", "NRT") {}
 
     function transferFrom(address f, address t, uint256 v) public override returns (bool) {
         super._transfer(f, t, v);
         return false;
     }
-}
-
-interface IMintable is IERC20 {
-    function mint(address to, uint256 v) external;
 }
 
 /// @notice IDOSNodeStaking::stake() carries an explicit guard:
@@ -110,7 +100,7 @@ contract SecurityNonStandardTokenTest is Test {
     }
 
     /// @dev Mocks are funded by minting to this test contract first.
-    function _fundMock(IMintable token, uint256 amt) internal {
+    function _fundMock(MockToken token, uint256 amt) internal {
         token.mint(address(this), 1_000_000);
         token.transfer(alice, amt);
         vm.prank(alice);
