@@ -102,7 +102,7 @@ jobs:
             echo "::error::the redirect guard held; the reported finding does not reproduce"
             exit 1
           fi
-          grep -q 'redirect:"follow" (expected "manual")' poc.out || {
+          grep -q 'redirect="follow" (expected "manual")' poc.out || {
             echo "::error::PoC failed for an unexpected reason"
             exit 1
           }
