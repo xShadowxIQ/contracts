@@ -53,12 +53,19 @@ contract SecurityEpochBoundaryTest is Test {
 
         vm.warp(START + 2 days); // epoch 1 begins, epoch 0 is now complete
 
-        vm.prank(alice);
-        uint256 got = staking.withdrawReward();
+        // Actual behaviour: stake and unstake land in the SAME epoch, so the two
+        // cancel and nothing accrues. withdrawReward() then reverts outright
+        // because the payable amount is zero.
+        (uint256 reward,,,) = staking.withdrawableReward(alice);
+        assertEq(reward, 0, "held ~24h but accrued zero reward");
 
-        // Actual behaviour: stake and unstake land in the SAME epoch, so they
-        // cancel out and the user is credited NOTHING.
-        assertEq(got, 0, "held ~24h but received zero reward");
+        vm.prank(alice);
+        vm.expectRevert(IDOSNodeStaking.NoWithdrawableStake.selector);
+        staking.withdrawUnstaked();
+
+        vm.prank(alice);
+        vm.expectRevert(); // NoWithdrawableRewards()
+        staking.withdrawReward();
     }
 
     /// @dev Holds capital for ~ONE SECOND across the epoch boundary.
