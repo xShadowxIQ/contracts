@@ -26,19 +26,19 @@ jobs:
         run: forge test --match-path "test/SecurityThirdPartyStake.t.sol" -vv
 
       - name: Invariant - solvency and reward conservation
-        run: forge test --match-path "test/SecuritySolvencyInvariant.t.sol" -vv
+        run: FOUNDRY_FUZZ_RUNS=4000 forge test --match-path "test/SecuritySolvencyInvariant.t.sol" -vv
 
       - name: Invariant - reward conservation under changing epoch reward
-        run: forge test --match-path "test/SecurityRewardConservation.t.sol" -vv
+        run: FOUNDRY_FUZZ_RUNS=4000 forge test --match-path "test/SecurityRewardConservation.t.sol" -vv
 
       - name: Invariant - user share can never exceed the pool (ratio > 1 check)
-        run: forge test --match-path "test/SecurityStakeRatioInvariant.t.sol" -vv
+        run: FOUNDRY_FUZZ_RUNS=4000 forge test --match-path "test/SecurityStakeRatioInvariant.t.sol" -vv
 
       - name: Epoch-boundary reward characterisation
         run: forge test --match-path "test/SecurityEpochBoundary.t.sol" -vv
 
       - name: Griefing and view-function robustness
-        run: forge test --match-path "test/SecurityGriefingAndViews.t.sol" -vv
+        run: FOUNDRY_FUZZ_RUNS=4000 forge test --match-path "test/SecurityGriefingAndViews.t.sol" -vv
 
       - name: IDOSVesting review
         run: forge test --match-path "test/SecurityVestingReview.t.sol" -vv
