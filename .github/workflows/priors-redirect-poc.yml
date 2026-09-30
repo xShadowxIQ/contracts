@@ -1,0 +1,113 @@
+name: Priors PoC - x402 redirect guard
+
+# Independent CI confirmation of a finding in priors-agents/priors (@priors/x402).
+# The report itself cannot be pushed to that fork from this bot account, so this
+# workflow checks out the exact upstream commit that contains the defect and runs the
+# PoC there, unmodified.
+#
+# Expected result: the PoC exits NON-ZERO, because the finding is that the guard is
+# lost. This job asserts that, so the workflow passes only when the bug reproduces.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  redirect-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out priors at the reported commit
+        run: |
+          git clone --depth 1 https://github.com/priors-agents/priors.git priors
+          cd priors
+          git fetch --depth 1 origin 32e0e8dfadfc7c5fcb8d99c2d30e061d7d8a84ea
+          git checkout FETCH_HEAD
+          echo "priors at: $(git rev-parse HEAD)"
+
+      - name: Install the PoC and its dependencies
+        working-directory: priors
+        run: |
+          curl -sL https://foundry.paradigm.xyz | bash
+          npm install --no-audit --no-fund
+          mkdir -p scripts
+          cat > scripts/test-x402-redirect-guard.mjs <<'POC'
+          // PoC: @priors/x402 follows redirects with a signed payment header when the
+          // caller's init carries `redirect: undefined`.
+          //
+          // packages/x402/src/payer.mjs:
+          //   const asRequest = (input, init) => new Request(input, { redirect: "manual", ...(init || {}) });
+          // The spread comes AFTER the default, so an init that mentions redirect but
+          // leaves it undefined overwrites "manual" with undefined, and `new Request`
+          // applies the platform default, "follow". The signed PAYMENT-SIGNATURE header
+          // then rides along to whatever host the redirect names.
+          //
+          // sdk/float.mjs was fixed for exactly this in commit 32e0e8d; this file was not.
+          import assert from "node:assert/strict";
+          import { createPayer } from "../packages/x402/src/payer.mjs";
+
+          const PAYMENT = { "PAYMENT-SIGNATURE": "c2lnbmVkLXBheW1lbnQ" };
+          const signer = {
+            getAddress: async () => "0x1111111111111111111111111111111111111111",
+            signTypedData: async () => "0x" + "11".repeat(65),
+            provider: {},
+          };
+
+          async function probe(init) {
+            const seen = [];
+            const fetchImpl = async (req) => {
+              seen.push({ redirect: req.redirect, leaked: req.headers.get("PAYMENT-SIGNATURE") });
+              return new Response(null, { status: 200 });
+            };
+            const payer = createPayer({ signer, fetchImpl, pendingRetries: 0 });
+            // resend(input, paymentHeaders, init): init is the RequestInit itself.
+            await payer.resend("https://merchant.example/resource", PAYMENT, init);
+            assert.equal(seen.length, 1);
+            return seen[0];
+          }
+
+          let failed = 0;
+          const check = async (name, init, expected) => {
+            const got = await probe(init);
+            const ok = got.redirect === expected;
+            if (!ok) failed++;
+            console.log(`  ${ok ? "ok  " : "FAIL"} ${name}: redirect=${JSON.stringify(got.redirect)} (expected ${JSON.stringify(expected)}), payment header present: ${got.leaked ? "yes" : "no"}`);
+          };
+
+          console.log("@priors/x402 redirect guard");
+          await check("init with no `redirect` key", { method: "GET" }, "manual");
+          await check("init with `redirect: undefined`", { method: "GET", redirect: undefined }, "manual");
+          await check("init with `redirect: \"manual\"`", { method: "GET", redirect: "manual" }, "manual");
+          await check("init omitted (the path pay() itself uses)", undefined, "manual");
+
+          if (failed === 0) {
+            console.log("PASS: the payer held redirect:manual in every case.");
+            process.exit(0);
+          }
+          console.log(`FAIL: ${failed} case(s) lost the redirect guard.`);
+          process.exit(1);
+          POC
+
+      - name: The PoC must FAIL (that is the finding)
+        working-directory: priors
+        run: |
+          set +e
+          node scripts/test-x402-redirect-guard.mjs | tee poc.out
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "PoC exit code: $rc"
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::the redirect guard held; the reported finding does not reproduce"
+            exit 1
+          fi
+          grep -q 'redirect:"follow" (expected "manual")' poc.out || {
+            echo "::error::PoC failed for an unexpected reason"
+            exit 1
+          }
+          echo "::notice::CONFIRMED: resend() drops redirect:manual to follow when init.redirect is undefined"
+
+      - name: Publish
+        if: always()
+        run: cat priors/poc.out >> "$GITHUB_STEP_SUMMARY"
