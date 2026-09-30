@@ -19,73 +19,46 @@ jobs:
         with:
           version: v1.5.0
 
-      - name: Install solc + dependencies
+      # The earlier attempt used the crytic/slither-action wrapper, which crashed
+      # crytic-compile while recursing through the continuous-clearing-auction
+      # submodule tree (v4-periphery -> solmate -> ds-test -> ...). We now install
+      # Slither directly and analyse ONLY the three in-scope bounty files.
+      - name: Install Slither
+        run: |
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet slither-analyzer solc-select
+          slither --version
+
+      - name: Build in-scope contracts
         run: |
           forge soldeer install
+          forge build --skip test --skip script
 
-      # Scope ONLY the three bounty files. The previous attempt ran Slither over
-      # the whole project, which crashed crytic-compile while recursing through the
-      # continuous-clearing-auction submodule tree (v4-periphery/solmate/ds-test...).
-      # Restricting --include-path keeps the analysis deterministic.
-      - name: Slither - IDOSNodeStaking
+      - name: Analyse the three in-scope contracts
         run: |
           mkdir -p .slither-out
-          slither src/IDOSNodeStaking.sol \
-            --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
-            --compile-force-framework foundry \
-            --foundry-out-directory out \
-            --exclude-dependencies \
-            --json .slither-out/staking.json || true
-          echo "===== IDOSNodeStaking detectors ====="
-          if [ -s .slither-out/staking.json ]; then
-            python3 - <<'PY'
-          import json
-          d = json.load(open('.slither-out/staking.json'))
-          det = d.get('results', {}).get('detectors', [])
-          print(f"total detectors fired: {len(det)}")
-          for x in det:
-              print(f"[{x.get('impact','?')}/{x.get('confidence','?')}] {x.get('check')} :: {x.get('description','')[:400]}")
-          PY
-          else
-            echo "no json produced"
-          fi
+          for pair in "IDOSNodeStaking:IDOSNodeStaking" "IDOSToken:IDOSToken" "IDOSVesting:IDOSVesting"; do
+            file="${pair%%:*}"
+            echo ""
+            echo "################ $file ################"
+            slither "src/$file.sol" \
+              --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
+              --foundry-out-directory out \
+              --exclude-dependencies \
+              --exclude naming-convention,solc-version \
+              --json ".slither-out/$file.json" > ".slither-out/$file.txt" 2>&1 || true
+            python3 .github/scripts/slither_summary.py ".slither-out/$file.json" || tail -20 ".slither-out/$file.txt"
+          done
 
-      - name: Slither - IDOSToken
+      - name: Publish detector summary as job summary
         run: |
-          slither src/IDOSToken.sol \
-            --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
-            --compile-force-framework foundry \
-            --foundry-out-directory out \
-            --exclude-dependencies \
-            --json .slither-out/token.json || true
-          echo "===== IDOSToken detectors ====="
-          if [ -s .slither-out/token.json ]; then
-            python3 - <<'PY'
-          import json
-          d = json.load(open('.slither-out/token.json'))
-          det = d.get('results', {}).get('detectors', [])
-          print(f"total detectors fired: {len(det)}")
-          for x in det:
-              print(f"[{x.get('impact','?')}/{x.get('confidence','?')}] {x.get('check')} :: {x.get('description','')[:400]}")
-          PY
-          fi
-
-      - name: Slither - IDOSVesting
-        run: |
-          slither src/IDOSVesting.sol \
-            --solc-remaps '@openzeppelin/=dependencies/@openzeppelin-contracts-5.5.0/' \
-            --compile-force-framework foundry \
-            --foundry-out-directory out \
-            --exclude-dependencies \
-            --json .slither-out/vesting.json || true
-          echo "===== IDOSVesting detectors ====="
-          if [ -s .slither-out/vesting.json ]; then
-            python3 - <<'PY'
-          import json
-          d = json.load(open('.slither-out/vesting.json'))
-          det = d.get('results', {}).get('detectors', [])
-          print(f"total detectors fired: {len(det)}")
-          for x in det:
-              print(f"[{x.get('impact','?')}/{x.get('confidence','?')}] {x.get('check')} :: {x.get('description','')[:400]}")
-          PY
-          fi
+          {
+            echo "## Slither - in-scope contracts only"
+            for f in IDOSNodeStaking IDOSToken IDOSVesting; do
+              echo ""
+              echo "### $f"
+              echo '```'
+              python3 .github/scripts/slither_summary.py ".slither-out/$f.json" || tail -20 ".slither-out/$f.txt"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
