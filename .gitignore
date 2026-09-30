@@ -13,3 +13,4 @@
 /broadcast/*/*/dry-run
 # pnpm deploy output
 /bundle
+priors/
