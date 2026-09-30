@@ -50,7 +50,7 @@ jobs:
             echo "::error::the redirect guard held; the reported finding does not reproduce"
             exit 1
           fi
-          grep -q 'redirect="follow"' poc.out || { echo "::error::unexpected failure"; exit 1; }
+          grep -qE 'redirect ?= ?"follow"' poc.out || { echo "::error::unexpected failure"; exit 1; }
           echo "::notice::CONFIRMED: resend() drops redirect:manual to follow when init.redirect is undefined"
 
       - name: End-to-end PoC - the signed header reaches a second origin
