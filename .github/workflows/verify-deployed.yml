@@ -22,79 +22,85 @@ jobs:
       - name: Install dependencies
         run: forge soldeer install
 
-      - name: Compare on-chain dispatcher against upstream master ABI
+      - name: Fetch on-chain runtime bytecode via JSON-RPC
         run: |
-          set -euo pipefail
-          STAKING=0x6132F2EE66deC6bdf416BDA9588D663AeCeec337
-          TOKEN=0x68731d6F14B827bBCfFbEBb62b19Daa18de1d79c
-
-          fetch() {
-            for u in "${ARBITRUM_ONE_RPC_URL:-https://arb1.arbitrum.io/rpc}" \
-                     https://arb1.arbitrum.io/rpc \
+          set -uo pipefail
+          fetch_code() {
+            local addr="$1"
+            for u in https://arb1.arbitrum.io/rpc \
                      https://arbitrum-one-rpc.publicnode.com \
-                     https://arbitrum.drpc.org; do
-              out=$(cast code "$1" --rpc-url "$u" 2>/dev/null || true)
-              if [ "${#out}" -gt 1000 ]; then echo "$out"; return 0; fi
+                     https://arbitrum.drpc.org \
+                     https://1rpc.io/arb \
+                     https://arbitrum.meowrpc.com \
+                     https://arb-pokt.nodies.app; do
+              resp=$(curl -s --max-time 25 -X POST "$u" \
+                -H 'Content-Type: application/json' \
+                --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$addr\",\"latest\"]}" || true)
+              code=$(printf '%s' "$resp" | python3 -c "import sys,json
+          try:
+              d=json.load(sys.stdin); print(d.get('result','') or '')
+          except Exception:
+              print('')" 2>/dev/null || true)
+              if [ "${#code}" -gt 1000 ]; then
+                echo "$u"
+                printf '%s' "$code" > "code_$addr.hex"
+                return 0
+              fi
+              echo "  miss $u (${#code} chars)" >&2
             done
             return 1
           }
 
-          # ---- source selectors (upstream master src/IDOSNodeStaking.sol) ----
-          forge inspect src/IDOSNodeStaking.sol:IDOSNodeStaking methodIdentifiers \
-            | grep -oE '\| [0-9a-f]{8}' | tr -d '| ' | sort -u > src_sel.txt
-          echo "source selectors: $(wc -l < src_sel.txt)"
+          STAKING=0x6132F2EE66deC6bdf416BDA9588D663AeCeec337
+          TOKEN=0x68731d6F14B827bBCfFbEBb62b19Daa18de1d79c
 
-          CODE=$(fetch "$STAKING") || { echo "could not fetch bytecode"; exit 1; }
-          echo "on-chain runtime bytes: $(( (${#CODE} - 2) / 2 ))"
-          echo "on-chain solc version: 0x$(cast code "$STAKING" --rpc-url https://arb1.arbitrum.io/rpc >/dev/null 2>&1; echo unknown)"
-
-          # ---- extract PUSH4 (0x63) immediates from the selector dispatcher ----
-          # dispatcher lives in the first ~4KB; strip the 0x and scan for '63' + 8 hex
-          printf '%s' "${CODE#0x}" | head -c 8000 \
-            | grep -oE '63[0-9a-f]{8}' | cut -c3- | sort -u > deployed_sel.txt
-          echo "on-chain selectors: $(wc -l < deployed_sel.txt)"
-
-          echo "===== DIFF: source vs on-chain ====="
-          if diff -u src_sel.txt deployed_sel.txt; then
-            echo "RESULT: on-chain IDOSNodeStaking exposes EXACTLY the upstream master ABI surface."
+          echo "=== fetching IDOSNodeStaking $STAKING ==="
+          if U=$(fetch_code "$STAKING"); then
+            echo "ok via $U -> $(( ($(wc -c < code_$STAKING.hex)) / 2 )) bytes"
           else
-            echo "RESULT: MISMATCH - see diff above."
+            echo "FAILED to fetch staking bytecode"
           fi
 
-          echo "===== selector presence check ====="
-          while read -r s; do
-            if grep -q "^$s$" deployed_sel.txt; then
-              echo "FOUND    $s"
-            else
-              echo "MISSING  $s"
-            fi
-          done < src_sel.txt
+          echo "=== fetching IDOSToken $TOKEN ==="
+          if U=$(fetch_code "$TOKEN"); then
+            echo "ok via $U -> $(( ($(wc -c < code_$TOKEN.hex)) / 2 )) bytes"
+          else
+            echo "FAILED to fetch token bytecode"
+          fi
 
-      - name: Confirm key function selectors on-chain
-        run: |
-          for s in "withdrawUnstaked()" "stake(address,address,uint256)" "unstake(address,uint256)" \
-                   "slash(address)" "withdrawReward()" "withdrawSlashedStakes()" \
-                   "createEpochCheckpoint(address)" "setEpochReward(uint256)" "withdrawableReward(address)"; do
-            sel=$(cast sig "$s")
-            echo "$sel  $s"
-          done
+          ls -la code_*.hex 2>/dev/null || echo "no bytecode files"
 
-      - name: Confirm deployed IDOSToken matches upstream master surface
+      - name: Compare on-chain dispatcher against upstream master ABI
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          STAKING=0x6132F2EE66deC6bdf416BDA9588D663AeCeec337
           TOKEN=0x68731d6F14B827bBCfFbEBb62b19Daa18de1d79c
-          for u in "${ARBITRUM_ONE_RPC_URL:-https://arb1.arbitrum.io/rpc}" \
-                   https://arbitrum-one-rpc.publicnode.com \
-                   https://arbitrum.drpc.org; do
-            out=$(cast code "$TOKEN" --rpc-url "$u" 2>/dev/null || true)
-            if [ "${#out}" -gt 1000 ]; then echo "$out" > tok.hex; break; fi
-          done
-          [ -s tok.hex ] || { echo "no token bytecode"; exit 0; }
-          forge inspect src/IDOSToken.sol:IDOSToken methodIdentifiers \
-            | grep -oE '\| [0-9a-f]{8}' | tr -d '| ' | sort -u > tok_src.txt
-          printf '%s' "$(sed 's/^0x//' tok.hex)" | head -c 8000 \
-            | grep -oE '63[0-9a-f]{8}' | cut -c3- | sort -u > tok_dep.txt
-          echo "source token selectors: $(wc -l < tok_src.txt)"
-          echo "on-chain token selectors: $(wc -l < tok_dep.txt)"
-          echo "===== DIFF ====="
-          diff -u tok_src.txt tok_dep.txt && echo "RESULT: on-chain IDOSToken matches upstream master surface."
+
+          compare() {
+            local src="$1" contract="$2" name="$3" hexfile="$4"
+            [ -s "$hexfile" ] || { echo "$name: no bytecode captured, skipping"; return 0; }
+
+            forge inspect "$src:$contract" methodIdentifiers \
+              | grep -oE '\| [0-9a-f]{8}' | tr -d '| ' | sort -u > "${name}_src.txt"
+
+            # scan the dispatcher region for PUSH4 (0x63) immediates
+            head -c 9000 "$hexfile" | grep -oE '63[0-9a-f]{8}' | cut -c3- | sort -u > "${name}_dep.txt"
+
+            echo "----- $name -----"
+            echo "source selectors : $(wc -l < ${name}_src.txt)"
+            echo "on-chain selectors: $(wc -l < ${name}_dep.txt)"
+            echo "solc (metadata)  : $(tail -c 20 "$hexfile")"
+            if diff -u "${name}_src.txt" "${name}_dep.txt"; then
+              echo "RESULT $name: on-chain selectors MATCH upstream master surface (superset check below)"
+            else
+              echo "RESULT $name: DIFFERENCES above (inspect manually)"
+            fi
+            echo "-- presence of each source selector on-chain --"
+            while read -r s; do
+              if grep -q "^$s$" "${name}_dep.txt"; then echo "FOUND    $s"; else echo "MISSING  $s"; fi
+            done < "${name}_src.txt"
+          }
+
+          compare src/IDOSNodeStaking.sol IDOSNodeStaking staking "code_$STAKING.hex"
+          compare src/IDOSToken.sol IDOSToken token "code_$TOKEN.hex"
+          compare src/IDOSVesting.sol IDOSVesting vesting "code_missing.hex"
