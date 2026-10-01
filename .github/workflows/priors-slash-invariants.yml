@@ -1,0 +1,48 @@
+name: Priors PoC - slash reserve invariants
+
+# Adversarial probe of the one code path where lender principal could in principle be
+# reachable: CreditPoolV2._slash topping up from `reserve`, and what happens when that
+# reserve is empty. Under BOUNTY.md a Critical is "lender principal can be reached";
+# `totalBadDebt` is the pool's own record of exactly that.
+#
+# This probe runs against unmodified upstream. If it ever observes totalBadDebt != 0 or a
+# falling share price, that is a Critical finding.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  slash-invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Check out priors at the reported commit
+        run: |
+          git clone --depth 1 https://github.com/priors-agents/priors.git priors
+          cd priors
+          git fetch --depth 1 origin 32e0e8dfadfc7c5fcb8d99c2d30e061d7d8a84ea
+          git checkout FETCH_HEAD
+          echo "priors at: $(git rev-parse HEAD)"
+
+      - name: Copy the probe in
+        working-directory: priors
+        run: cp "$GITHUB_WORKSPACE/.github/poc/SlashReserveInvariants.t.sol" test/
+
+      - name: Run the slash/reserve invariant probe
+        working-directory: priors
+        run: FOUNDRY_FUZZ_RUNS=400 forge test --match-path "test/SlashReserveInvariants.t.sol" -vv
+
+      - name: Publish
+        if: always()
+        run: |
+          forge test --match-path "test/SlashReserveInvariants.t.sol" 2>&1 \
+            | grep -E "Suite result|PASS|FAIL" >> "$GITHUB_STEP_SUMMARY" || true
